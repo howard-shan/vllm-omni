@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""H100/Linux benchmark of the real thinker embedding path, without a checkpoint.
+"""Linux/CUDA benchmark of the real thinker embedding path, without a checkpoint.
 
 Run the SAME script with --source-root selecting baseline or patched sources.
 Timing, call-count and profiler runs are separate. No CUDA means a hard error,
@@ -37,7 +37,9 @@ def arguments():
     parser.add_argument("--pair-id", required=True, help="Same ID for one baseline/patched pair, e.g. r1")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("timing", "count", "profile"), default="timing")
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--device", default="cuda:0", help="One CUDA device per run; paired A/B runs must use the same GPU"
+    )
     parser.add_argument("--mask-device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--embedding-backend", choices=("vllm", "torch"), default="vllm")
@@ -253,7 +255,7 @@ def profile_case(model, pool, args, case_id, torch):
 def main():
     args = arguments()
     if sys.platform != "linux":
-        raise RuntimeError("Run this experiment in the H100 Linux/CUDA environment, not on macOS")
+        raise RuntimeError("Run this experiment in a Linux/CUDA environment")
     if os.environ.get("CUDA_LAUNCH_BLOCKING", "0") not in {"", "0"}:
         raise RuntimeError("Unset CUDA_LAUNCH_BLOCKING for this benchmark")
     args.source_root = args.source_root.resolve()
@@ -262,7 +264,7 @@ def main():
     sys.path.insert(0, str(args.source_root))
     import torch
 
-    if not torch.cuda.is_available() or not args.device.startswith("cuda"):
+    if torch.version.cuda is None or not torch.cuda.is_available() or not args.device.startswith("cuda"):
         raise RuntimeError("A working CUDA GPU is required; CPU fallback is disabled")
 
     # Import the selected source tree only after pinning custom-op registration
@@ -274,8 +276,8 @@ def main():
 
     args.device = torch.device(args.device)
     current_omni_platform.set_device(args.device)
-    if "H100" not in torch.cuda.get_device_name(args.device):
-        raise RuntimeError("This validation protocol targets H100; detected a different GPU")
+    if args.dtype == "bfloat16" and not torch.cuda.is_bf16_supported(including_emulation=False):
+        raise RuntimeError("The selected CUDA device must support native BF16 for --dtype bfloat16")
     harness = load_harness()
     shape = load_shape(harness, args.config)
     dtype = getattr(torch, args.dtype)

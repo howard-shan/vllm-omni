@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Run Qwen3-Omni embedding regressions on an H100 Linux/CUDA environment.
+"""Run Qwen3-Omni embedding regressions on a Linux/CUDA environment.
 
 The oracle assigns features to token positions independently of the model's
 merge helpers. LM call counts additionally catch issue #7451: ordinary
 multimodal inputs must not repeat the text embedding lookup. Small synthetic
 weights suffice; no checkpoint is downloaded or loaded.
 """
+
+import sys
 
 import pytest
 import torch
@@ -45,12 +47,14 @@ _SCENARIOS = (
 
 @pytest.fixture(scope="module", autouse=True)
 def require_cuda_environment():
-    if not torch.cuda.is_available():
+    if sys.platform != "linux" or torch.version.cuda is None or not torch.cuda.is_available():
         pytest.fail(
-            "This validation suite requires an H100 Linux/CUDA environment; "
+            "This validation suite requires a Linux/CUDA environment; "
             "CPU execution and an all-skipped result are not valid substitutes.",
             pytrace=False,
         )
+    if not torch.cuda.is_bf16_supported(including_emulation=False):
+        pytest.fail("This validation suite requires native BF16 support on the current CUDA device.", pytrace=False)
 
 
 @torch.inference_mode()
