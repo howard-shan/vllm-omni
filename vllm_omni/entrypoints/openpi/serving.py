@@ -103,6 +103,14 @@ class ServingRealtimeRobotOpenPI:
             for stage_config in getattr(engine_client, "stage_configs", []) or []:
                 if getattr(stage_config, "stage_type", None) != "diffusion":
                     continue
+                # Typed diffusion stages keep model-owned OpenPI handshake
+                # metadata in diffusion_config.model_config. The out-of-process
+                # head only has this stage view because full od_config lives in
+                # the worker.
+                diffusion_config = getattr(stage_config, "diffusion_config", None)
+                model_config = getattr(diffusion_config, "model_config", None)
+                if model_config is not None:
+                    break
                 engine_args = getattr(stage_config, "engine_args", None)
                 model_config = getattr(engine_args, "model_config", None)
                 if model_config is not None:
@@ -119,10 +127,32 @@ class ServingRealtimeRobotOpenPI:
     def reset(self, obs: dict) -> None:
         """Compatibility hook; per-connection state lives in RobotRealtimeConnection."""
 
+    def drop_session(self, session_id: str) -> None:
+        """Best-effort release of model-side session state for a closed rollout."""
+        drop = getattr(self.engine_client, "drop_session", None)
+        if callable(drop):
+            drop(session_id)
+            return
+        pipeline = self._pipeline()
+        for name in ("close_ar_diffusion_session", "drop_session_state"):
+            close = getattr(pipeline, name, None)
+            if callable(close):
+                close(session_id)
+                return
+
+    def _pipeline(self) -> Any:
+        engine = self.engine_client
+        for attr in ("model_runner", "runner", "diffusion_model_runner"):
+            runner = getattr(engine, attr, None)
+            pipeline = getattr(runner, "pipeline", None) if runner is not None else None
+            if pipeline is not None:
+                return pipeline
+        return getattr(engine, "pipeline", None)
+
     async def infer(self, obs: dict, *, session_id: str, reset: bool) -> ActionOutput:
         """raw obs → engine → actions."""
         # Build request, run inference through AsyncOmni
-        request = self._build_request(obs, session_id=session_id, reset=reset)
+        request = self.build_request(obs, session_id=session_id, reset=reset)
         result = None
         # OpenPI policy serving is one request -> one action reply. AsyncOmni
         # exposes an async iterator, so consume it to completion and use the
@@ -140,6 +170,10 @@ class ServingRealtimeRobotOpenPI:
 
     def _next_request_id(self, session_id: str) -> str:
         return f"robot-{session_id}-{next(self._request_counter)}"
+
+    def build_request(self, obs: dict, *, session_id: str, reset: bool) -> Any:
+        """Build an engine request from raw robot obs."""
+        return self._build_request(obs, session_id=session_id, reset=reset)
 
     def _build_request(self, obs: dict, *, session_id: str, reset: bool) -> Any:
         """Build engine request from raw robot obs.
