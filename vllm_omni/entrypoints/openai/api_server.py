@@ -1732,13 +1732,17 @@ async def realtime_websocket(websocket: WebSocket):
     """WebSocket endpoint for OpenAI-style realtime interactions."""
     duplex_handler = getattr(websocket.app.state, "openai_serving_duplex", None)
     duplex_query = websocket.query_params.get("duplex")
-    use_duplex_realtime = duplex_handler is not None and (
-        duplex_query is None or (isinstance(duplex_query, str) and duplex_query.lower() in {"1", "true", "on"})
-    )
-    if use_duplex_realtime and duplex_handler is not None:
+    duplex_requested = isinstance(duplex_query, str) and duplex_query.lower() in {"1", "true", "on"}
+    use_duplex_realtime = duplex_requested or (duplex_handler is not None and duplex_query is None)
+    if use_duplex_realtime:
         if await _reject_multi_api_duplex(websocket):
             return
         await _wait_for_duplex_warmup(websocket)
+        if duplex_handler is None:
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "error": "Duplex API is not available", "code": "unsupported"})
+            await websocket.close()
+            return
         await duplex_handler.handle_realtime_session(websocket)
         return
 

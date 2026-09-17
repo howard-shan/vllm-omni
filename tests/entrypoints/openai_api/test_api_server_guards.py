@@ -647,6 +647,31 @@ def test_websocket_routes_emit_stable_unavailable_frames_and_close(path: str, pa
                 websocket.receive_text()
 
 
+@pytest.mark.parametrize("flag", ["1", "true", "on"])
+def test_explicit_duplex_request_is_rejected_when_handler_is_unavailable(monkeypatch, flag: str) -> None:
+    class ForbiddenRealtimeConnection:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pytest.fail("Explicit duplex requests must not fall through to RealtimeConnection")
+
+    monkeypatch.setattr(api_server, "RealtimeConnection", ForbiddenRealtimeConnection)
+    app = FastAPI()
+    app.state.api_server_count = 1
+    app.state.openai_serving_duplex = None
+    app.state.openai_serving_realtime = object()
+    app.state.duplex_warmup_done = None
+    app.include_router(api_server.router)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/v1/realtime?duplex={flag}") as websocket:
+            assert websocket.receive_json() == {
+                "type": "error",
+                "error": "Duplex API is not available",
+                "code": "unsupported",
+            }
+            with pytest.raises(WebSocketDisconnect):
+                websocket.receive_text()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("duplex_query", "expected_handler"),
