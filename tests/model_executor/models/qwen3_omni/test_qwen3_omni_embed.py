@@ -22,7 +22,7 @@ from benchmarks.qwen3_omni.embedding_harness import (
     make_thinker,
 )
 
-pytestmark = [pytest.mark.core_model, pytest.mark.gpu]
+pytestmark = [pytest.mark.core_model, pytest.mark.cuda]
 
 _SHAPE = ModelShape(
     vocab_size=64,
